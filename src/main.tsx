@@ -20,6 +20,8 @@ import ReportPage from "./pages/Report";
 import ProfilePage from "./pages/Profile";
 import NotFoundPage, { RouteErrorPage } from "./pages/NotFound";
 import "./index.css";
+import { startDiskSync } from "./services/disk-sync";
+void startDiskSync();
 
 /** 旧链接兜底：/daily/:id 换算成对应的 /today/:date */
 function LegacyDailyRedirect() {

@@ -38,7 +38,6 @@ export function MaterialUploadPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const saveMaterial = useAppStore((s) => s.saveMaterial);
-  const setStatus = useAppStore((s) => s.setSuggestionStatus);
   const materials = useAppStore((s) => s.materials);
   const events = useAppStore((s) => s.events);
   const consume = useAppStore((s) => s.consumeMockConfig);
@@ -117,6 +116,7 @@ export function MaterialUploadPage() {
         mimeType = file.type;
         fileSize = file.size;
       }
+      const original = fileId ? await fileService.get(fileId) : undefined;
       const status = fileId
         ? "uploaded"
         : form.status === "saved_externally"
@@ -125,6 +125,9 @@ export function MaterialUploadPage() {
       saveMaterial(
         {
           ...form,
+          id: existing?.id,
+          sha256: original?.sha256 || existing?.sha256,
+          uploadedAt: original?.uploadedAt || existing?.uploadedAt,
           name: form.name.trim(),
           status,
           fileId,
@@ -141,8 +144,7 @@ export function MaterialUploadPage() {
         },
         params.get("suggestionId") || undefined,
       );
-      const suggestionId = params.get("suggestionId");
-      if (suggestionId) setStatus(suggestionId, "completed");
+      // 完成状态由覆盖范围与材料匹配规则核对，不因点击保存强行完成。
       toast("材料已保存");
       navigate(
         form.eventIds[0]

@@ -53,6 +53,9 @@ export interface WorkEvent {
   attention: Attention;
   sourceType: EventSource;
   sourceId?: string;
+  /** 支持这条候选的原始消息与引用；用户确认不等于独立核实 */
+  sourceMessageIds?: string[];
+  sourceQuote?: string;
   materialIds: string[];
   updates: EventUpdate[];
   confirmedAt?: string;
@@ -85,6 +88,8 @@ export interface Material {
   fileName?: string;
   mimeType?: string;
   fileSize?: number;
+  sha256?: string;
+  uploadedAt?: string;
   externalLocationNote?: string;
   extractionDraft?: string;
   confirmedExtraction?: string;
@@ -142,6 +147,9 @@ export interface ChatMessage {
   dailyEntryId: string;
   role: "user" | "assistant";
   content: string;
+  provider?: "api" | "demo" | "local";
+  model?: string;
+  replyToMessageId?: string;
   /** 本条消息插入的事件候选卡片 */
   candidateEventIds?: string[];
   /** 本条消息插入的材料建议卡片 */
@@ -175,7 +183,7 @@ export interface AppData {
 export type EventInput = Pick<
   WorkEvent,
   "title" | "occurredAt" | "people" | "description" | "attention" | "sourceType"
-> & { sourceId?: string };
+> & { sourceId?: string; sourceMessageIds?: string[]; sourceQuote?: string };
 export type MaterialInput = Omit<Material, "id" | "createdAt" | "updatedAt"> & {
   id?: string;
 };

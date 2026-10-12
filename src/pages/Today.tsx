@@ -17,6 +17,8 @@ import {
 } from "../components/doodles";
 import { useAppStore } from "../store/useAppStore";
 import { aiService, parsePeople, resolveDate } from "../services/ai";
+import { useBackendPreferences } from "../services/backend";
+import { useDiskSyncStatus } from "../services/disk-sync";
 import {
   requirementsForChange,
   pendingSuggestions,
@@ -26,7 +28,6 @@ import {
   Button,
   Collapsible,
   LoadingState,
-  MockBadge,
   Modal,
   RequireProfile,
   SectionTitle,
@@ -104,7 +105,8 @@ function TodayWorkspace({ date }: { date: string }) {
   const setSummary = useAppStore((s) => s.setSummary);
   const appendMessage = useAppStore((s) => s.appendMessage);
   const setMessageStatus = useAppStore((s) => s.setMessageStatus);
-  const removeMessage = useAppStore((s) => s.removeMessage);
+  const prefs = useBackendPreferences();
+  const diskStatus = useDiskSyncStatus();
   const addDraft = useAppStore((s) => s.addDraft);
   const suggest = useAppStore((s) => s.suggest);
   const consume = useAppStore((s) => s.consumeMockConfig);
@@ -183,7 +185,13 @@ function TodayWorkspace({ date }: { date: string }) {
     }
   }, []);
 
-  const lastMessage = dayMessages[dayMessages.length - 1];
+  useEffect(() => {
+    useAppStore.getState().messages.filter((m) => m.dailyEntryId === entry?.id && m.status === "sending").forEach((m) => setMessageStatus(m.id, "failed"));
+  // 页面重载时，挂起请求不会自动重发或丢失原文。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry?.id]);
+
+  const lastMessage = [...dayMessages].reverse().find((m) => m.role === "assistant");
   const awaiting =
     lastMessage?.role === "assistant" ? lastMessage.clarify : undefined;
 
@@ -201,15 +209,18 @@ function TodayWorkspace({ date }: { date: string }) {
     : [];
   const openSuggestions = pendingSuggestions(daySuggestions);
 
-  const send = async (raw: string) => {
+  const send = async (raw: string, retryId?: string) => {
     const value = raw.trim();
     if (!value || sending) return;
     setSending(true);
     setError("");
     setText("");
+    let userMessageId = retryId || "";
+    try {
     const entryId = ensureEntry(date);
     setDraftText(entryId, "");
-    const userMessageId = appendMessage({
+    if (retryId) setMessageStatus(retryId, "sending");
+    else userMessageId = appendMessage({
       role: "user",
       content: value,
       conversationId,
@@ -217,7 +228,6 @@ function TodayWorkspace({ date }: { date: string }) {
       status: "sending",
     });
     const cfg = consume();
-    try {
       // 上一条 AI 消息在补问时间 → 这条用户输入用于补全候选事件
       if (awaiting) {
         const occurredAt = resolveDate(value, date) ?? date;
@@ -229,6 +239,7 @@ function TodayWorkspace({ date }: { date: string }) {
           // 用户的补充也要留在描述里，不能丢
           description: `${awaiting.description}\n补充：${value}`,
           sourceId: entryId,
+          sourceMessageIds: [...(awaiting.sourceMessageIds ?? []), userMessageId],
         });
         setMessageStatus(userMessageId, "sent");
         const reqs = requirementsForChange(
@@ -239,7 +250,9 @@ function TodayWorkspace({ date }: { date: string }) {
         const suggestionIds = reqs.length ? suggest(reqs, entryId) : [];
         appendMessage({
           role: "assistant",
-          content: "已经整理好了，放在「今日整理」里，需要的时候确认就好。",
+          content: "已按你补充的日期在本地整理候选，放在「今日整理」里；这不是模型核实的事实。请核对后确认。",
+          provider: "local",
+          replyToMessageId: userMessageId,
           conversationId,
           dailyEntryId: entryId,
           suggestionIds,
@@ -249,7 +262,8 @@ function TodayWorkspace({ date }: { date: string }) {
         const context = {
           date,
           entryId,
-          userText: [entry?.content, value].filter(Boolean).join("\n"),
+          userText: (useAppStore.getState().entries.find((e) => e.id === entryId)?.content || value).slice(-16000),
+          history: useAppStore.getState().messages.filter((m) => m.dailyEntryId === entryId && m.id !== userMessageId && m.status === "sent").slice(-20).map((m) => ({ role: m.role, content: m.content })),
           confirmedEvents: confirmed,
           draftTitles: drafts.map((d) => d.title),
           materials,
@@ -260,11 +274,14 @@ function TodayWorkspace({ date }: { date: string }) {
           ? suggest(reply.requirements, entryId)
           : [];
         const candidateEventIds = reply.candidateEvent
-          ? [addDraft({ ...reply.candidateEvent, sourceId: entryId })]
+          ? [addDraft({ ...reply.candidateEvent, sourceId: entryId, sourceMessageIds: [userMessageId], sourceQuote: reply.candidateEvent.sourceQuote || value })]
           : [];
         appendMessage({
           role: "assistant",
           content: reply.content,
+          provider: reply.provider,
+          model: reply.model,
+          replyToMessageId: userMessageId,
           conversationId,
           dailyEntryId: entryId,
           suggestionIds,
@@ -273,7 +290,7 @@ function TodayWorkspace({ date }: { date: string }) {
           emergency: reply.emergency,
           updateSuggestionEventId: reply.updateSuggestionEventId,
           // 必须带上：下一条用户消息要用来补全这个候选事件
-          clarify: reply.clarify,
+          clarify: reply.clarify ? { ...reply.clarify, sourceMessageIds: [userMessageId] } : undefined,
         });
       }
       // 已发送的内容立即算作已保存
@@ -281,7 +298,7 @@ function TodayWorkspace({ date }: { date: string }) {
       // 继续聊天可以更新 AI 总结，但不会改写已确认事件
       await generateSummary(
         entryId,
-        [entry?.content, value].filter(Boolean).join("\n"),
+        useAppStore.getState().entries.find((e) => e.id === entryId)?.content || value,
         { mood: entry?.mood },
       );
       requestAnimationFrame(() =>
@@ -289,8 +306,9 @@ function TodayWorkspace({ date }: { date: string }) {
       );
     } catch (e) {
       // 失败时保留这条输入，标记为待重试
-      setMessageStatus(userMessageId, "failed");
-      setSaveState("error");
+      if (userMessageId) setMessageStatus(userMessageId, "failed");
+      else setText(value);
+      setSaveState(userMessageId ? "saved" : "error");
       setError((e as Error).message);
     } finally {
       setSending(false);
@@ -298,8 +316,7 @@ function TodayWorkspace({ date }: { date: string }) {
   };
 
   const retry = async (messageId: string, content: string) => {
-    removeMessage(messageId);
-    await send(content);
+    await send(content, messageId);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -430,7 +447,7 @@ function TodayWorkspace({ date }: { date: string }) {
               <SectionTitle
                 title="今天的状态"
                 subtitle="选一个心情就能保存，也可以直接写一句话。"
-                action={<MockBadge label="演示模式" />}
+                action={<span className="badge">本地日记</span>}
               />
               <MoodPicker value={mood} onChange={setMood} />
 
@@ -471,7 +488,7 @@ function TodayWorkspace({ date }: { date: string }) {
               <SectionTitle
                 title="工作记录与 AI 对话"
                 subtitle="想到什么就说什么，可以分几次慢慢写。"
-                action={<MockBadge />}
+                action={<span className="badge">{prefs.aiMode === "demo" ? "本地演示规则" : "真实 API · 需配置"}</span>}
               />
 
               {dayMessages.length === 0 && (
@@ -518,6 +535,7 @@ function TodayWorkspace({ date }: { date: string }) {
                           {/* 助手消息带一个小小的陪伴角色头像 */}
                           <Companion size={28} simple className="mt-0.5 shrink-0" />
                           <div className="bubble-assistant min-w-0 max-w-[92%] whitespace-pre-line">
+                            <p className="faint mb-1">{message.provider === "api" ? `模型回复 · ${message.model || "API"}` : message.provider === "local" ? "本地整理 · 非模型回复" : "历史演示回复 · 非真实 AI"}</p>
                             {message.content}
                           </div>
                         </div>
@@ -623,7 +641,7 @@ function TodayWorkspace({ date }: { date: string }) {
                 </form>
               </div>
               <p className="faint">
-                情绪和日常状态可以放心说。这里只做整理，不提供结论。
+                {diskStatus.message}。API 模式会将授权的上下文发送给模型服务，请先去除敏感信息；候选事件需你核对确认。
               </p>
             </section>
 

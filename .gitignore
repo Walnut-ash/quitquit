@@ -12,3 +12,9 @@ playwright-report
 
 # 视觉 / 响应式走查生成的截图，可用 scripts/ 里的脚本重新生成
 outputs/
+
+# 后端密钥和本机敏感数据（不提交）
+.env
+.env.*
+!.env.example
+data/

@@ -1,4 +1,8 @@
+import { fileHash, getBackendPreferences, readDiskFile, uploadDiskFile } from "./backend";
+
 export interface StoredFile {
+  sha256?: string;
+  uploadedAt?: string;
   id: string;
   blob: Blob;
   name: string;
@@ -32,6 +36,9 @@ export function validateFile(file: File) {
 export const fileService = {
   async put(file: File, id = crypto.randomUUID()) {
     validateFile(file);
+    const sha256 = await fileHash(file);
+    const uploadedAt = new Date().toISOString();
+    if (getBackendPreferences().diskSync) await uploadDiskFile(id, file, file.name, file.type || "text/plain");
     const db = await openDB();
     try {
       await new Promise<void>((res, rej) => {
@@ -40,7 +47,9 @@ export const fileService = {
           id,
           blob: file,
           name: file.name,
-          type: file.type,
+          type: file.type || "text/plain",
+          sha256,
+          uploadedAt,
         });
         tx.oncomplete = () => res();
         tx.onerror = () =>
@@ -53,6 +62,27 @@ export const fileService = {
     }
   },
   async get(id: string): Promise<StoredFile | undefined> {
+    const local = await fileService.getLocal(id);
+    if (local) return local;
+    if (getBackendPreferences().diskSync) return fileService.restoreFromDisk(id);
+    return undefined;
+  },
+  async restoreFromDisk(id: string): Promise<StoredFile> {
+    const remote = await readDiskFile(id);
+    if (await fileHash(remote.blob) !== remote.sha256) throw new Error("原始文件校验失败，请勿把该副本当作完整原件。" );
+    const restored: StoredFile = { id, blob: remote.blob, name: remote.name, type: remote.type, sha256: remote.sha256, uploadedAt: remote.uploadedAt };
+    const db = await openDB();
+    try {
+      await new Promise<void>((res, rej) => {
+        const tx = db.transaction("files", "readwrite");
+        tx.objectStore("files").put(restored);
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(new Error("恢复原件到浏览器失败。"));
+      });
+    } finally { db.close(); }
+    return restored;
+  },
+  async getLocal(id: string): Promise<StoredFile | undefined> {
     const db = await openDB();
     try {
       return await new Promise((res, rej) => {

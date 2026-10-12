@@ -55,7 +55,8 @@ export default function AppLayout() {
           })}
         </nav>
         <p className="faint mt-auto px-4 py-4 leading-relaxed">
-          本地演示 · 数据只保存在当前浏览器
+          本地工作区 · 可选择本机磁盘备份
+          <br />模型配置与隐私授权在「我的」
         </p>
       </aside>
 

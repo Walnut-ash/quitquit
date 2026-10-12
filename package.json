@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "backend": "node scripts/backend.mjs",
+    "dev:full": "node scripts/dev-full.mjs",
+    "test:backend": "node --test tests/backend.test.mjs",
+    "check:model": "node scripts/check-model.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
