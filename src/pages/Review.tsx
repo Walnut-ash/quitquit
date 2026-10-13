@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { RiskPanel } from "../components/RiskPanel";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   CalendarDays,
@@ -152,6 +153,7 @@ export default function ReviewPage() {
 
         {tab === "review" && (
           <div className="stack">
+            <RiskPanel />
             {/* 情绪日历：点某一天直接回到那天的记录 */}
             <section className="panel stack">
               <MoodCalendar

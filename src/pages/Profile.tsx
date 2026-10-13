@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { BackendSettings } from "../components/BackendSettings";
+import { clearDiskWorkspace, pauseDiskSync } from "../services/disk-sync";
+import { getBackendPreferences, setBackendPreferences } from "../services/backend";
 import { useNavigate } from "react-router-dom";
 import { useAppStore, STORAGE_KEY } from "../store/useAppStore";
 import {
@@ -48,9 +51,9 @@ export default function ProfilePage() {
       new Blob([JSON.stringify(snapshot, null, 2)], {
         type: "application/json",
       }),
-      "职场日记-演示数据.json",
+      "职场日记-浏览器记录.json",
     );
-    toast("已导出演示数据（不含文件内容）");
+    toast("已导出浏览器记录（不含文件原件）");
   };
   return (
     <RequireProfile>
@@ -122,14 +125,16 @@ export default function ProfilePage() {
             <p className="muted">还没有基础材料，之后可以随时补充。</p>
           )}
         </div>
+        <BackendSettings />
         <SuggestionList title="待处理留痕" />
         <div className="card stack">
           <SectionTitle title="隐私与数据说明" />
           <ul className="stack muted small">
             <li>· AI 整理结果需要你本人确认，不会自动变成事实。</li>
             <li>· 产品只做记录与整理，不提供法律结论。</li>
-            <li>· 本演示的数据仅保存在当前浏览器中，不会上传服务器。</li>
-            <li>· 原始文件不会被修改，模拟提取摘要与原件分开保存。</li>
+            <li>· 默认保存在浏览器；明确选择后可保存到本机 SQLite。尚未开通云端。</li>
+            <li>· API 回复会向你配置的模型服务发送已授权上下文，不自动发送附件。</li>
+            <li>· 原件与提取摘要分开；SHA-256 用于一致性检查，不证明材料真实。</li>
           </ul>
           <Button variant="ghost" onClick={() => setPrivacy(true)}>
             查看完整说明
@@ -182,14 +187,14 @@ export default function ProfilePage() {
         <div className="card stack">
           <SectionTitle title="数据管理" />
           <div className="button-row">
-            <Button onClick={exportData}>导出演示数据</Button>
+            <Button onClick={exportData}>导出浏览器记录</Button>
             <Button onClick={() => setResetOpen(true)}>重置演示故事</Button>
             <Button variant="danger" onClick={() => setClearOpen(true)}>
               清空本地数据
             </Button>
           </div>
           <p className="small muted">
-            清空会删除 localStorage 中的记录与 IndexedDB 中的文件，无法恢复。
+            清空删除浏览器记录和原件；若本机备份已启用，也会删除当前工作区的磁盘记录和原件。暂停同步后磁盘副本仍保留，请自行保护。
           </p>
         </div>
         <p className="small muted">
@@ -300,9 +305,9 @@ export default function ProfilePage() {
         <Modal title="隐私与数据说明" onClose={() => setPrivacy(false)}>
           <div className="stack">
             <p className="muted">
-              这是一个本地演示版本。工作档案、日记、事件、材料元数据和聊天记录保存在
-              localStorage（键名 {STORAGE_KEY}），上传的原始文件保存在
-              IndexedDB。清空浏览器数据或使用无痕窗口都会导致数据不可访问。
+              工作档案、日记、事件、材料元数据和聊天记录默认保存在
+              localStorage（键名 {STORAGE_KEY}），原始文件在 IndexedDB。选择本机备份后，同步到项目 data/workday.sqlite，包含原件与版本记录；尚无云端账号。
+              清理浏览器 Cookie 会丢失本机工作区凭证。SQLite 未加密，不能直接作为公开服务部署。
             </p>
             <p className="muted">
               模拟 AI
@@ -320,11 +325,13 @@ export default function ProfilePage() {
         title="确认清空本地数据？"
         danger
         confirmText="我确认清空"
-        description="这会删除当前浏览器中的工作档案、日记、事件、材料元数据和所有上传文件，且无法恢复。建议先导出演示数据作为备份。"
+        description="这会删除当前浏览器全部记录和上传原件；若本机备份已启用，还会删除当前工作区的磁盘记录与原件，无法恢复。请先停止后端并完整备份 data 目录；JSON 不含原件。"
         onCancel={() => setClearOpen(false)}
         onConfirm={async () => {
           setBusy(true);
           try {
+            if (getBackendPreferences().diskSync) await clearDiskWorkspace();
+            else pauseDiskSync();
             await clearData();
             toast("本地数据已清空");
             navigate("/onboarding", { replace: true });
@@ -346,6 +353,8 @@ export default function ProfilePage() {
         onConfirm={async () => {
           setBusy(true);
           try {
+            pauseDiskSync();
+            setBackendPreferences({ diskSync: false, aiMode: "demo" });
             await loadDemo(true);
             toast("已重置为演示故事");
             navigate("/today", { replace: true });

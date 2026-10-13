@@ -7,6 +7,7 @@ import type {
   WorkEvent,
 } from "../types";
 import { MOODS, addDays, today } from "../constants";
+import { backendRequest, getBackendPreferences } from "./backend";
 import {
   matchingMaterials,
   requirementsForChange,
@@ -14,9 +15,9 @@ import {
 } from "./materials";
 
 /**
- * 这里是**模拟实现**。所有输出都来自本地规则模板，
- * 不是真实模型分析，界面上会统一标注「模拟 AI」。
- * 后续接入真实模型时，替换本文件即可，`aiService` 的签名保持不变。
+ * 保留本地演示规则供显式选择的演示模式使用。
+ * API 模式通过本机后端调用模型；未配置或失败时绝不回退为模拟回复。
+ * 文件解析仍为本地 TXT 节选，不宣称已实现图片/PDF OCR。
  */
 export const simulate = async (config: MockConfig) => {
   await new Promise((r) => setTimeout(r, Math.max(0, config.delayMs)));
@@ -119,9 +120,12 @@ export interface AssistantContext {
   /** 当天已有的草稿标题，避免重复生成同一候选 */
   draftTitles: string[];
   materials: Material[];
+  history?: { role: "user" | "assistant"; content: string }[];
 }
 
 export interface AssistantReply {
+  provider?: "api" | "demo";
+  model?: string;
   content: string;
   /** 需要用户确认的事件草稿。一般候选进「今日整理」，不必当场确认。 */
   candidateEvent?: EventInput;
@@ -300,16 +304,29 @@ export function buildSummary(
 
 export const aiService = {
   async reply(text: string, ctx: AssistantContext, config: MockConfig) {
-    await simulate(config);
-    return buildReply(text, ctx);
+    const prefs = getBackendPreferences();
+    if (prefs.aiMode === "demo") {
+      await simulate(config);
+      return { ...buildReply(text, ctx), provider: "demo" as const };
+    }
+    if (!prefs.aiConsent) throw new Error("请先到「我的 → 聊天 API 与本机备份」确认模型数据授权；原文仍会保留。" );
+    const reply = await backendRequest<AssistantReply>("/chat", { text, context: ctx, consent: prefs.aiConsent });
+    return { ...reply, requirements: requirementsForChange(text, ctx.entryId, ctx.date) };
   },
   async summarize(
     status: Partial<DailyStatusInput>,
     userText: string,
     config: MockConfig,
   ) {
-    await simulate(config);
-    return buildSummary(status, userText);
+    const prefs = getBackendPreferences();
+    if (prefs.aiMode === "demo") {
+      await simulate(config);
+      return buildSummary(status, userText);
+    }
+    if (!prefs.aiConsent) throw new Error("尚未同意发送模型上下文。" );
+    if (!userText.trim()) return "已保存今天的状态；尚无聊天原文可供总结。";
+    const result = await backendRequest<{ summary: string }>("/summary", { status, userText: userText.slice(-16000), consent: true });
+    return result.summary;
   },
   async extract(file: File, config: MockConfig) {
     await simulate(config);
